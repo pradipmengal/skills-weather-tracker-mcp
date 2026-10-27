@@ -51,6 +51,26 @@ export function cityStats(city) {
     .get(city);
 }
 
+// Return one row per city with its latest reading, average temperature, and log count.
+export function citySummary() {
+  return getDb()
+    .prepare(`
+      SELECT w.city,
+             w.country,
+             COUNT(*) AS count,
+             AVG(w.temperature_c) AS avg_c,
+             MAX(w.created_at) AS last_logged,
+             (SELECT l.temperature_c FROM weather_logs l
+               WHERE l.city = w.city ORDER BY l.created_at DESC, l.id DESC LIMIT 1) AS latest_c,
+             (SELECT l.condition FROM weather_logs l
+               WHERE l.city = w.city ORDER BY l.created_at DESC, l.id DESC LIMIT 1) AS latest_condition
+      FROM weather_logs w
+      GROUP BY w.city
+      ORDER BY w.city
+    `)
+    .all();
+}
+
 // Close the database connection (used by the CLI on exit).
 export function closeDb() {
   if (db) {

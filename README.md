@@ -82,6 +82,22 @@ node src/cli.js stats "London"
 npm run stats -- "London"
 ```
 
+### Web dashboard
+
+```bash
+npm start            # http://localhost:3000 (set PORT to change it)
+```
+
+The page has a city input with an **Add / Refresh** button, summary cards per city, a Chart.js temperature chart, and a table of recent logs. It is backed by:
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/logs` | Latest 50 logs |
+| `GET /api/summary` | Per city: latest temperature, average temperature, log count |
+| `POST /api/refresh?city=NAME` | Fetch current weather for a city and save it |
+
+### Notes
+
 An unknown city or a network problem prints a friendly message and exits with code 1. The schema lives in [`db/schema.sql`](db/schema.sql) and is applied automatically. Set `WEATHER_DB=/path/to/file.db` to use a different database file.
 
 ---
