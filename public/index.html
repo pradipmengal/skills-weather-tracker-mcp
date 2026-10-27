@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mona's Weather Tracker</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #f6f8fa; --panel: #ffffff; --text: #1f2328; --muted: #656d76;
+      --border: #d0d7de; --accent: #1f883d; --accent-text: #ffffff; --error: #cf222e;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0d1117; --panel: #161b22; --text: #e6edf3; --muted: #8d96a0;
+        --border: #30363d; --accent: #238636; --accent-text: #ffffff; --error: #f85149;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--text);
+      font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    main { max-width: 1040px; margin: 0 auto; padding: 24px 16px 48px; }
+    h1 { font-size: 1.6rem; margin: 0 0 4px; }
+    h2 { font-size: 1.05rem; margin: 0 0 12px; }
+    .sub { color: var(--muted); margin: 0 0 20px; }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+    form { display: flex; gap: 8px; flex-wrap: wrap; }
+    input {
+      flex: 1 1 220px; padding: 9px 12px; font: inherit; color: var(--text);
+      background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    }
+    button {
+      padding: 9px 16px; font: inherit; font-weight: 600; cursor: pointer;
+      background: var(--accent); color: var(--accent-text); border: 0; border-radius: 6px;
+    }
+    button:disabled { opacity: .6; cursor: wait; }
+    #status { min-height: 1.5em; margin: 10px 0 0; color: var(--muted); }
+    #status.error { color: var(--error); }
+    .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+    .card { border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+    .card .city { font-weight: 600; }
+    .card .temp { font-size: 1.8rem; font-weight: 700; margin: 4px 0; }
+    .card .meta { color: var(--muted); font-size: .85rem; }
+    .chart-wrap { position: relative; height: 300px; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+    th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+    th { color: var(--muted); font-weight: 600; }
+    td.num { font-variant-numeric: tabular-nums; }
+    .empty { color: var(--muted); }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Mona's Weather Tracker</h1>
+  <p class="sub">Live weather from Open-Meteo, logged to SQLite.</p>
+
+  <section class="panel">
+    <form id="refresh-form">
+      <input id="city" name="city" placeholder="City name, e.g. Mumbai" autocomplete="off" required />
+      <button id="refresh-btn" type="submit">Add / Refresh</button>
+    </form>
+    <p id="status" role="status"></p>
+  </section>
+
+  <section class="panel">
+    <h2>Cities</h2>
+    <div id="cards" class="cards"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Temperature over time</h2>
+    <div class="chart-wrap"><canvas id="chart"></canvas></div>
+  </section>
+
+  <section class="panel">
+    <h2>Recent logs</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>City</th><th>Country</th><th>Temp</th><th>Humidity</th><th>Wind</th><th>Condition</th><th>Logged</th></tr>
+        </thead>
+        <tbody id="logs"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+  const PALETTE = ['#2f81f7', '#1f883d', '#d29922', '#cf222e', '#8250df', '#1b7c83', '#bf3989', '#6e7781'];
+  let chart;
+
+  // SQLite timestamps are UTC "YYYY-MM-DD HH:MM:SS"; convert to a Date.
+  function parseTs(ts) {
+    return new Date(ts.replace(' ', 'T') + 'Z');
+  }
+
+  // Format a number with one decimal place and a unit, or "-" when missing.
+  function fmt(value, unit) {
+    return value == null ? '-' : `${Number(value).toFixed(1)}${unit}`;
+  }
+
+  // Create an element with text content (never innerHTML, so city names can't inject markup).
+  function el(tag, text, className) {
+    const node = document.createElement(tag);
+    if (text != null) node.textContent = text;
+    if (className) node.className = className;
+    return node;
+  }
+
+  // Show a status or error message under the form.
+  function setStatus(message, isError = false) {
+    const status = document.getElementById('status');
+    status.textContent = message;
+    status.className = isError ? 'error' : '';
+  }
+
+  // Render one summary card per city.
+  function renderCards(summary) {
+    const cards = document.getElementById('cards');
+    cards.replaceChildren();
+    if (summary.length === 0) {
+      cards.append(el('p', 'No cities yet. Add one above.', 'empty'));
+      return;
+    }
+    for (const s of summary) {
+      const card = el('div', null, 'card');
+      card.append(
+        el('div', s.country ? `${s.city}, ${s.country}` : s.city, 'city'),
+        el('div', fmt(s.latest_c, '°C'), 'temp'),
+        el('div', `${s.latest_condition ?? '-'} · avg ${fmt(s.avg_c, '°C')}`, 'meta'),
+        el('div', `${s.count} log${s.count === 1 ? '' : 's'}`, 'meta'),
+      );
+      cards.append(card);
+    }
+  }
+
+  // Render the recent-logs table.
+  function renderTable(logs) {
+    const body = document.getElementById('logs');
+    body.replaceChildren();
+    if (logs.length === 0) {
+      const row = el('tr');
+      const cell = el('td', 'No weather logs yet.', 'empty');
+      cell.colSpan = 7;
+      row.append(cell);
+      body.append(row);
+      return;
+    }
+    for (const log of logs) {
+      const row = el('tr');
+      row.append(
+        el('td', log.city),
+        el('td', log.country ?? '-'),
+        el('td', fmt(log.temperature_c, '°C'), 'num'),
+        el('td', log.humidity == null ? '-' : `${log.humidity}%`, 'num'),
+        el('td', fmt(log.wind_kmh, ' km/h'), 'num'),
+        el('td', log.condition ?? '-'),
+        el('td', parseTs(log.created_at).toLocaleString()),
+      );
+      body.append(row);
+    }
+  }
+
+  // Draw one temperature line per city using Chart.js.
+  function renderChart(logs) {
+    const byCity = new Map();
+    for (const log of [...logs].reverse()) {
+      if (!byCity.has(log.city)) byCity.set(log.city, []);
+      byCity.get(log.city).push({ x: parseTs(log.created_at).getTime(), y: log.temperature_c });
+    }
+    const datasets = [...byCity].map(([city, points], i) => ({
+      label: city,
+      data: points,
+      borderColor: PALETTE[i % PALETTE.length],
+      backgroundColor: PALETTE[i % PALETTE.length],
+      tension: 0.25,
+      pointRadius: 4,
+    }));
+    const muted = getComputedStyle(document.documentElement).getPropertyValue('--muted').trim();
+    if (chart) chart.destroy();
+    chart = new Chart(document.getElementById('chart'), {
+      type: 'line',
+      data: { datasets },
+      options: {
+        maintainAspectRatio: false,
+        color: muted,
+        scales: {
+          x: {
+            type: 'linear',
+            ticks: { color: muted, maxTicksLimit: 6, callback: (v) => new Date(v).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) },
+          },
+          y: { ticks: { color: muted, callback: (v) => `${v}°C` } },
+        },
+        plugins: {
+          tooltip: {
+            callbacks: {
+              title: (items) => new Date(items[0].parsed.x).toLocaleString(),
+              label: (item) => `${item.dataset.label}: ${item.parsed.y.toFixed(1)}°C`,
+            },
+          },
+        },
+      },
+    });
+  }
+
+  // Load logs and summary from the API and redraw everything.
+  async function loadAll() {
+    const [logsRes, summaryRes] = await Promise.all([fetch('/api/logs'), fetch('/api/summary')]);
+    if (!logsRes.ok || !summaryRes.ok) throw new Error('Could not load data from the server.');
+    const [logs, summary] = await Promise.all([logsRes.json(), summaryRes.json()]);
+    renderCards(summary);
+    renderTable(logs);
+    renderChart(logs);
+  }
+
+  // Handle the Add / Refresh form: save fresh weather for the city, then reload.
+  document.getElementById('refresh-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const input = document.getElementById('city');
+    const button = document.getElementById('refresh-btn');
+    const city = input.value.trim();
+    if (!city) return;
+    button.disabled = true;
+    setStatus(`Fetching weather for ${city}…`);
+    try {
+      const res = await fetch(`/api/refresh?city=${encodeURIComponent(city)}`, { method: 'POST' });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || 'Request failed.');
+      setStatus(`Saved ${body.city}: ${fmt(body.temperature_c, '°C')}, ${body.condition}.`);
+      input.value = '';
+      await loadAll();
+    } catch (err) {
+      setStatus(err.message, true);
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  loadAll().catch((err) => setStatus(err.message, true));
+</script>
+</body>
+</html>
