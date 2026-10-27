@@ -53,4 +53,37 @@ You ──prompt──▶ Copilot Agent Mode
 
 ---
 
+## Using the Weather Tracker CLI
+
+Install dependencies once:
+
+```bash
+npm install
+```
+
+Log the current weather for a city (geocodes it, fetches Open-Meteo, saves a row to `weather.db`):
+
+```bash
+node src/cli.js add "London"
+npm run add -- "Tokyo"
+```
+
+Show recent logs as a table (default 10):
+
+```bash
+node src/cli.js list
+npm run list -- --limit 5
+```
+
+Show min, max, and average temperature and the log count for a city:
+
+```bash
+node src/cli.js stats "London"
+npm run stats -- "London"
+```
+
+An unknown city or a network problem prints a friendly message and exits with code 1. The schema lives in [`db/schema.sql`](db/schema.sql) and is applied automatically. Set `WEATHER_DB=/path/to/file.db` to use a different database file.
+
+---
+
 © 2026 • [MIT License](LICENSE)
